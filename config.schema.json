@@ -1,0 +1,237 @@
+{
+  "pluginAlias": "DaikinAccfactory",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "DaikinAccfactory",
+        "condition": "1=2"
+      },
+      "devices": {
+        "type": "array",
+        "items": {
+          "title": "Device",
+          "type": "object",
+          "properties": {
+            "system": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "placeholder": "Host name or IP address"
+            },
+            "name": {
+              "title": "Description",
+              "type": "string",
+              "placeholder": "Device description for configuration"
+            },
+            "httpPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "exclude": {
+              "type": "boolean",
+              "default": false
+            },
+            "eveHistory": {
+              "type": "boolean"
+            },
+            "coolingMin": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "coolingMax": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "heatingMin": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "heatingMax": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "autoMin": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "autoMax": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "externalSensor": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "autoDiscover": {
+            "type": "boolean",
+            "default": true
+          },
+          "httpPort": {
+            "type": "integer",
+            "default": 80,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "exclude": {
+            "type": "boolean"
+          },
+          "externalSensor": {
+            "type": "boolean",
+            "default": false
+          },
+          "eveHistory": {
+            "type": "boolean",
+            "default": true
+          },
+          "pollInterval": {
+            "type": "integer",
+            "default": 15,
+            "minimum": 5,
+            "maximum": 300
+          },
+          "discoveryInterval": {
+            "type": "integer",
+            "default": 60,
+            "minimum": 30,
+            "maximum": 3600
+          }
+        }
+      }
+    }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Device Settings",
+      "description": "Configure global device settings or override them for specific devices.",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        {
+          "key": "options.httpPort",
+          "type": "number",
+          "title": "Default HTTP Port"
+        },
+        {
+          "key": "options.externalSensor",
+          "title": "Outdoor Temperature Sensor"
+        },
+        {
+          "key": "options.exclude",
+          "title": "Exclude All Devices"
+        },
+        {
+          "key": "options.eveHistory",
+          "title": "Enable Eve History for All Devices"
+        },
+        {
+          "type": "array",
+          "title": "Device Overrides",
+          "key": "devices",
+          "description": "Override settings for specific devices using their serial number. Additional advanced options are available via manual configuration.",
+          "expandable": true,
+          "expanded": false,
+          "buttonText": "Add Device Override",
+          "orderable": false,
+          "arrayItemTitle": "{{value.name || value.serialNumber || 'Device'}}",
+          "items": [
+            {
+              "key": "devices[].system",
+              "title": "Host"
+            },
+            {
+              "key": "devices[].name",
+              "title": "Description"
+            },
+            {
+              "key": "devices[].httpPort",
+              "type": "number",
+              "title": "HTTP Port"
+            },
+            {
+              "key": "devices[].exclude",
+              "title": "Exclude Device"
+            },
+            {
+              "key": "devices[].eveHistory",
+              "title": "Enable Eve History"
+            },
+            {
+              "key": "devices[].externalSensor",
+              "title": "Outdoor Temperature Sensor"
+            },
+            {
+              "key": "devices[].coolingMin",
+              "type": "number",
+              "title": "Cooling Minimum (°C)",
+              "placeholder": "18"
+            },
+            {
+              "key": "devices[].coolingMax",
+              "type": "number",
+              "title": "Cooling Maximum (°C)",
+              "placeholder": "32"
+            },
+            {
+              "key": "devices[].heatingMin",
+              "type": "number",
+              "title": "Heating Minimum (°C)",
+              "placeholder": "10"
+            },
+            {
+              "key": "devices[].heatingMax",
+              "type": "number",
+              "title": "Heating Maximum (°C)",
+              "placeholder": "30"
+            },
+            {
+              "key": "devices[].autoMin",
+              "type": "number",
+              "title": "Auto Minimum (°C)",
+              "placeholder": "18"
+            },
+            {
+              "key": "devices[].autoMax",
+              "type": "number",
+              "title": "Auto Maximum (°C)",
+              "placeholder": "30"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Options",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        {
+          "key": "options.pollInterval",
+          "title": "Polling Interval"
+        },
+        {
+          "key": "options.discoveryInterval",
+          "title": "Discovery Interval"
+        }
+      ]
+    }
+  ]
+}
