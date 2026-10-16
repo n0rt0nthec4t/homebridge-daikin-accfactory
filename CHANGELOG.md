@@ -2,6 +2,8 @@
 
 ## v0.0.2 (2026/10/16)
 
+- Publish command status after SET completes to support the updated HomeKitDevice lifecycle; keep HTTP work independent of HomeKit publication so commands arriving during a poll cannot deadlock.
+
 - Handle units without indoor humidity: retain the last valid sensor reading on both heater/cooler and dry-mode services, falling back to zero when none exists, without returning null or raising a communication error.
 
 ## v0.0.1 (2026/10/07)

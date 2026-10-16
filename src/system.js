@@ -11,7 +11,7 @@
 // - Refresh the air conditioner and optional outdoor sensor together
 // - Release discovery and platform polling during shutdown
 //
-// Code version 2026.10.07
+// Code version 2026.10.16
 // Mark Hulskamp
 'use strict';
 
@@ -200,8 +200,8 @@ export default class DaikinAccfactory {
   }
 
   refresh(tracked, changes = undefined) {
-    // Serialize setup, timer polls, discovery updates, and command refreshes
-    // for this MAC. A failed poll retains its previous snapshot as offline.
+    // Only HTTP work owns this queue. Waiting for a HomeKit UPDATE here would
+    // deadlock when an active SET is waiting for a preceding poll to finish.
     let update = async () => {
       if (this.#shuttingDown === true) {
         if (changes !== undefined) {
@@ -224,96 +224,123 @@ export default class DaikinAccfactory {
         return;
       }
 
-      let override = this.config.devices.find((device) => device.system === client.system);
-      let data = client.deviceData(override);
-      if (data === undefined) {
-        return;
-      }
-      data.description = HomeKitDevice.makeValidHKName(data.description) || 'Daikin Air Conditioner';
-      for (let field of Object.keys(TEMPERATURE_DEFAULTS)) {
-        data[field] = override?.[field] ?? TEMPERATURE_DEFAULTS[field];
-      }
-      data.eveHistory = override?.eveHistory ?? this.config.options.eveHistory;
-      let deviceUuid = HomeKitDevice.generateUUID(HomeKitDevice.PLUGIN_NAME, this.api, data.serialNumber);
-      let sensorUuid = HomeKitDevice.generateUUID(HomeKitDevice.PLUGIN_NAME, this.api, data.serialNumber + 'OUTSIDE');
-      if (tracked.device === undefined && data.excluded === true) {
-        this.log?.warn?.('Device "%s" is ignored due to it being marked as excluded', data.description);
-        let accessories = this.cachedAccessories.filter((accessory) => accessory?.UUID === deviceUuid || accessory?.UUID === sensorUuid);
-        if (accessories.length !== 0) {
-          try {
-            this.api.unregisterPlatformAccessories(HomeKitDevice.PLUGIN_NAME, HomeKitDevice.PLATFORM_NAME, accessories);
-            this.cachedAccessories = this.cachedAccessories.filter((accessory) => accessories.includes(accessory) === false);
-          } catch (error) {
-            this.log?.debug?.('Unable to remove excluded accessory "%s" from cache: %s', data.description, error.message);
-          }
-        }
-        return;
-      }
-
-      if (tracked.device === undefined) {
-        let device = new Airconditioner(this.cachedAccessories, this.api, data);
-        HomeKitDevice.message(device.uuid, HomeKitDevice.SET, async (values) => {
-          if ((await this.refresh(tracked, values.control ?? values)) === false) {
-            throw new Error('Daikin control request failed');
-          }
-        });
-        let added = await device.add({
-          hapAccessoryName: 'Daikin Air Conditioner',
-          hapCategory: this.api.hap.Categories.AIR_CONDITIONER,
-          enableHistory: data.eveHistory === true,
-        });
-        if (added !== true) {
-          await device.remove();
-          return;
-        }
-        tracked.device = device;
-      }
-      await HomeKitDevice.message(tracked.device.uuid, HomeKitDevice.UPDATE, data);
-
-      let externalSensor = override?.externalSensor ?? this.config.options.externalSensor;
-      let cachedSensor = this.cachedAccessories.find((accessory) => accessory?.UUID === sensorUuid);
-      if (externalSensor === false && cachedSensor !== undefined) {
-        try {
-          this.api.unregisterPlatformAccessories(HomeKitDevice.PLUGIN_NAME, HomeKitDevice.PLATFORM_NAME, [cachedSensor]);
-          this.cachedAccessories = this.cachedAccessories.filter((accessory) => accessory !== cachedSensor);
-        } catch (error) {
-          this.log?.debug?.('Unable to remove disabled outdoor sensor for "%s" from cache: %s', data.description, error.message);
-        }
-      }
-      if (externalSensor === true && (data.otemp !== undefined || tracked.sensor !== undefined || cachedSensor !== undefined)) {
-        let sensorData = {
-          serialNumber: data.serialNumber + 'OUTSIDE',
-          manufacturer: data.manufacturer,
-          description: HomeKitDevice.makeValidHKName(data.description + ' Outside Temperature'),
-          model: data.model,
-          softwareVersion: data.softwareVersion,
-          online: data.online === true && data.otemp !== undefined,
-          oTemp: data.otemp ?? tracked.sensor?.deviceData.oTemp,
-          eveHistory: data.eveHistory,
-        };
-        if (tracked.sensor === undefined) {
-          let sensor = new TemperatureSensor(this.cachedAccessories, this.api, sensorData);
-          let added = await sensor.add({
-            hapAccessoryName: 'Daikin Outdoor Temperature Sensor',
-            hapCategory: this.api.hap.Categories.SENSOR,
-            enableHistory: sensorData.eveHistory === true,
-          });
-          if (added !== true) {
-            await sensor.remove();
-            return;
-          }
-          tracked.sensor = sensor;
-        }
-        await HomeKitDevice.message(tracked.sensor.uuid, HomeKitDevice.UPDATE, sensorData);
-      }
+      return true;
     };
 
     tracked.refresh = (tracked.refresh ?? Promise.resolve()).then(update).catch((error) => {
       this.log?.warn?.('Unable to update Daikin accessory: %s', error.message);
-      // Keep the queue usable after a failure and report failed commands
-      // through the registered SET handler.
+      // Preserve the caller's failure result while keeping subsequent HTTP work usable.
       return false;
     });
-    return tracked.refresh;
+    return tracked.refresh
+      .then((refreshed) => {
+        // The SET caller requests publication after its state ownership ends.
+        if (changes !== undefined || refreshed !== true) {
+          return refreshed;
+        }
+        if (tracked.device === undefined) {
+          // Discovery and configured-host setup can converge on the same MAC
+          // before add() finishes. Keep initial publication ordered as well.
+          tracked.publication = (tracked.publication ?? Promise.resolve()).catch(() => {}).then(() => this.#publish(tracked));
+          return tracked.publication;
+        }
+        return HomeKitDevice.message(tracked.device.uuid, Airconditioner.REPORT);
+      })
+      .catch((error) => {
+        this.log?.warn?.('Unable to publish Daikin accessory: %s', error.message);
+        return false;
+      });
+  }
+
+  // Publication has its own HomeKit lifecycle slot, outside the HTTP queue and SET.
+  async #publish(tracked) {
+    if (this.#shuttingDown === true) {
+      return;
+    }
+    let client = tracked.client;
+    let override = this.config.devices.find((device) => device.system === client.system);
+    let data = client.deviceData(override);
+    if (data === undefined) {
+      return;
+    }
+    data.description = HomeKitDevice.makeValidHKName(data.description) || 'Daikin Air Conditioner';
+    for (let field of Object.keys(TEMPERATURE_DEFAULTS)) {
+      data[field] = override?.[field] ?? TEMPERATURE_DEFAULTS[field];
+    }
+    data.eveHistory = override?.eveHistory ?? this.config.options.eveHistory;
+    let deviceUuid = HomeKitDevice.generateUUID(HomeKitDevice.PLUGIN_NAME, this.api, data.serialNumber);
+    let sensorUuid = HomeKitDevice.generateUUID(HomeKitDevice.PLUGIN_NAME, this.api, data.serialNumber + 'OUTSIDE');
+    if (tracked.device === undefined && data.excluded === true) {
+      this.log?.warn?.('Device "%s" is ignored due to it being marked as excluded', data.description);
+      let accessories = this.cachedAccessories.filter((accessory) => accessory?.UUID === deviceUuid || accessory?.UUID === sensorUuid);
+      if (accessories.length !== 0) {
+        try {
+          this.api.unregisterPlatformAccessories(HomeKitDevice.PLUGIN_NAME, HomeKitDevice.PLATFORM_NAME, accessories);
+          this.cachedAccessories = this.cachedAccessories.filter((accessory) => accessories.includes(accessory) === false);
+        } catch (error) {
+          this.log?.debug?.('Unable to remove excluded accessory "%s" from cache: %s', data.description, error.message);
+        }
+      }
+      return;
+    }
+
+    if (tracked.device === undefined) {
+      let device = new Airconditioner(this.cachedAccessories, this.api, data);
+      HomeKitDevice.message(device.uuid, HomeKitDevice.SET, async (values) => {
+        let refreshed = await this.refresh(tracked, values.control ?? values);
+        if (refreshed === false) {
+          throw new Error('Daikin control request failed');
+        }
+      });
+      HomeKitDevice.message(device.uuid, Airconditioner.REPORT, () => this.#publish(tracked));
+      let added = await device.add({
+        hapAccessoryName: 'Daikin Air Conditioner',
+        hapCategory: this.api.hap.Categories.AIR_CONDITIONER,
+        enableHistory: data.eveHistory === true,
+      });
+      if (added !== true) {
+        await device.remove();
+        return;
+      }
+      tracked.device = device;
+    }
+    await HomeKitDevice.message(tracked.device.uuid, HomeKitDevice.UPDATE, data);
+
+    let externalSensor = override?.externalSensor ?? this.config.options.externalSensor;
+    let cachedSensor = this.cachedAccessories.find((accessory) => accessory?.UUID === sensorUuid);
+    if (externalSensor === false && cachedSensor !== undefined) {
+      try {
+        this.api.unregisterPlatformAccessories(HomeKitDevice.PLUGIN_NAME, HomeKitDevice.PLATFORM_NAME, [cachedSensor]);
+        this.cachedAccessories = this.cachedAccessories.filter((accessory) => accessory !== cachedSensor);
+      } catch (error) {
+        this.log?.debug?.('Unable to remove disabled outdoor sensor for "%s" from cache: %s', data.description, error.message);
+      }
+    }
+    if (externalSensor === true && (data.otemp !== undefined || tracked.sensor !== undefined || cachedSensor !== undefined)) {
+      let sensorData = {
+        serialNumber: data.serialNumber + 'OUTSIDE',
+        manufacturer: data.manufacturer,
+        description: HomeKitDevice.makeValidHKName(data.description + ' Outside Temperature'),
+        model: data.model,
+        softwareVersion: data.softwareVersion,
+        online: data.online === true && data.otemp !== undefined,
+        oTemp: data.otemp ?? tracked.sensor?.deviceData.oTemp,
+        eveHistory: data.eveHistory,
+      };
+      if (tracked.sensor === undefined) {
+        let sensor = new TemperatureSensor(this.cachedAccessories, this.api, sensorData);
+        let added = await sensor.add({
+          hapAccessoryName: 'Daikin Outdoor Temperature Sensor',
+          hapCategory: this.api.hap.Categories.SENSOR,
+          enableHistory: sensorData.eveHistory === true,
+        });
+        if (added !== true) {
+          await sensor.remove();
+          return;
+        }
+        tracked.sensor = sensor;
+      }
+      await HomeKitDevice.message(tracked.sensor.uuid, HomeKitDevice.UPDATE, sensorData);
+    }
   }
 }

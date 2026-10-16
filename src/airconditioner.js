@@ -13,7 +13,7 @@
 // - Only the service matching the current mode sends speed and swing changes
 // - DaikinClient merges partial commands with the latest control snapshot
 //
-// Code version 2026.10.07
+// Code version 2026.10.16
 // Mark Hulskamp
 'use strict';
 
@@ -35,7 +35,8 @@ function fanRatePercent(rate) {
 
 export default class Airconditioner extends HomeKitDevice {
   static TYPE = 'airconditioner';
-  static VERSION = '2026.10.07';
+  static VERSION = '2026.10.16';
+  static REPORT = 'Daikin.onReport'; // Publish polled state after SET releases state ownership.
 
   heaterCoolerService = undefined; // HomeKit HeaterCooler service
   fanService = undefined; // HomeKit Fanv2 service
@@ -490,8 +491,12 @@ export default class Airconditioner extends HomeKitDevice {
     // HomeKit must receive an error when the Daikin rejects or cannot receive a command.
     // Keep protocol requests separate from deviceData: only a reported UPDATE
     // should change the accessory snapshot, including after a failed command.
-    if ((await HomeKitDevice.message(this.uuid, HomeKitDevice.SET, { control: values })) === false) {
+    let result = await HomeKitDevice.message(this.uuid, HomeKitDevice.SET, { control: values });
+    if (result === false) {
       throw new this.hap.HapStatusError(this.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
+    // UPDATE cannot take state ownership inside SET. Await the report only after
+    // SET has completed; the platform keeps its network queue independent of it.
+    await this.message(Airconditioner.REPORT);
   }
 }

@@ -693,7 +693,7 @@ test('shutdown waits for an active write and rejects queued commands', async (co
     assert.equal(finished, false);
     release();
     assert.notEqual(await active, false);
-    assert.equal(await queued, false);
+    await assert.rejects(queued, /Daikin control request failed/);
     await shutdown;
     assert.equal(finished, true);
     assert.equal(writes, 1);
@@ -1006,6 +1006,71 @@ for (let accepted of [true, false]) {
     }
   });
 }
+
+test('a HomeKit command during an active poll completes and publishes reported state', { timeout: 2000 }, async (context) => {
+  let timer = mockPollTimer(context);
+  let control = snapshot('', '/aircon/get_control_info');
+  let pause = false;
+  let writes = 0;
+  let entered;
+  let release;
+  let started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  let gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let runtime = setup(
+    context,
+    async (system, path) => {
+      if (path === '/aircon/get_control_info') {
+        if (pause === true) {
+          pause = false;
+          entered();
+          await gate;
+        }
+        return { ...control };
+      }
+      if (path.startsWith('/aircon/set_control_info?') === true) {
+        writes++;
+        let values = Object.fromEntries(new URLSearchParams(path.split('?')[1]));
+        control = { ...control, ...values, ['dt' + values.mode]: values.stemp };
+        return { ret: 'OK' };
+      }
+      return snapshot(system, path);
+    },
+    { options: { autoDiscover: false, pollInterval: 5 }, devices: [{ system: '10.0.0.2' }] },
+  );
+  try {
+    await runtime.events.get('didFinishLaunching')[0]();
+    let heater = runtime.registered[0].getService(hap.Service.HeaterCooler);
+    pause = true;
+    let poll = timer.callback();
+    await started;
+    let command = heater
+      .getCharacteristic(hap.Characteristic.TargetHeaterCoolerState)
+      .handleSetRequest(hap.Characteristic.TargetHeaterCoolerState.HEAT);
+    // Allow SET to enter while the HTTP poll still owns the network queue.
+    await new Promise((resolve) => timers.setImmediate(resolve));
+    assert.equal(writes, 0);
+    release();
+    await Promise.all([poll, command]);
+    assert.equal(writes, 1);
+    assert.equal(
+      await heater.getCharacteristic(hap.Characteristic.TargetHeaterCoolerState).handleGetRequest(),
+      hap.Characteristic.TargetHeaterCoolerState.HEAT,
+    );
+    assert.equal(
+      heater.getCharacteristic(hap.Characteristic.CurrentHeaterCoolerState).value,
+      hap.Characteristic.CurrentHeaterCoolerState.HEATING,
+    );
+  } finally {
+    release();
+    for (let callback of runtime.events.get('shutdown') ?? []) {
+      await callback();
+    }
+  }
+});
 
 test('platform skips overlapping polls for a unit and resumes after completion', async (context) => {
   let timer = mockPollTimer(context);
