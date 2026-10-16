@@ -1121,3 +1121,96 @@ test('platform polls units independently without duplicate subscriptions on redi
     true,
   );
 });
+
+for (let humidity of [undefined, '--', '']) {
+  test('missing humidity uses valid fallbacks on both services: ' + humidity, async (context) => {
+    let runtime = setup(context, async (system, path) => {
+      let result = snapshot(system, path);
+      if (path === '/aircon/get_sensor_info') {
+        delete result.hhum;
+        if (humidity !== undefined) {
+          result.hhum = humidity;
+        }
+      }
+      return result;
+    });
+    // Restore cached humidity characteristics and retain their last readings.
+    let uuid = HomeKitDevice.generateUUID(HomeKitDevice.PLUGIN_NAME, hap, 'AABBCCDDEEFF');
+    let cached = new hap.Accessory('Cached Daikin', uuid);
+    cached._associatedPlatform = HomeKitDevice.PLATFORM_NAME;
+    cached.addService(hap.Service.HeaterCooler, '', 1).getCharacteristic(hap.Characteristic.CurrentRelativeHumidity);
+    if (humidity === '--') {
+      cached.addService(hap.Service.HumidifierDehumidifier, '', 1).updateCharacteristic(hap.Characteristic.CurrentRelativeHumidity, 48);
+    }
+    let warnings = [];
+    cached.on('characteristic-warning', (warning) => warnings.push(warning));
+    runtime.platform.configureAccessory(cached);
+    try {
+      await runtime.events.get('didFinishLaunching')[0]();
+      let heater = cached.getService(hap.Service.HeaterCooler);
+      assert.equal(heater.testCharacteristic(hap.Characteristic.CurrentRelativeHumidity), true);
+      assert.equal(await heater.getCharacteristic(hap.Characteristic.CurrentRelativeHumidity).handleGetRequest(), 0);
+      assert.equal(await heater.getCharacteristic(hap.Characteristic.CurrentTemperature).handleGetRequest(), 26);
+      let dry = cached.getService(hap.Service.HumidifierDehumidifier).getCharacteristic(hap.Characteristic.CurrentRelativeHumidity);
+      for (let read of [1, 2, 3]) {
+        assert.equal(await dry.handleGetRequest(), humidity === '--' ? 48 : 0, 'read ' + read);
+      }
+      await heater
+        .getCharacteristic(hap.Characteristic.TargetHeaterCoolerState)
+        .handleSetRequest(hap.Characteristic.TargetHeaterCoolerState.HEAT);
+      assert.equal(await heater.getCharacteristic(hap.Characteristic.Active).handleGetRequest(), hap.Characteristic.Active.ACTIVE);
+      assert.equal(
+        warnings.some(
+          (warning) =>
+            warning.originatorChain.includes('Current Relative Humidity') === true && warning.message.includes('illegal value') === true,
+        ),
+        false,
+      );
+    } finally {
+      for (let callback of runtime.events.get('shutdown') ?? []) {
+        await callback();
+      }
+    }
+  });
+}
+
+test('missing sensor readings after a poll retain the last valid readings without null', async (context) => {
+  let timer = mockPollTimer(context);
+  let missing = false;
+  let runtime = setup(
+    context,
+    async (system, path) => {
+      let result = snapshot(system, path);
+      return path === '/aircon/get_sensor_info' && missing === true ? { ...result, htemp: '--', hhum: '--' } : result;
+    },
+    { options: { autoDiscover: false, pollInterval: 5 }, devices: [{ system: '10.0.0.2' }] },
+  );
+  try {
+    await runtime.events.get('didFinishLaunching')[0]();
+    let accessory = runtime.registered[0];
+    let heater = accessory.getService(hap.Service.HeaterCooler);
+    let humidity = heater.getCharacteristic(hap.Characteristic.CurrentRelativeHumidity);
+    assert.equal(await humidity.handleGetRequest(), 55);
+    let warnings = [];
+    accessory.on('characteristic-warning', (warning) => warnings.push(warning));
+    missing = true;
+    await timer.callback();
+    // The shared device snapshot retains prior valid values for missing fields.
+    assert.equal(await humidity.handleGetRequest(), 55);
+    assert.equal(await heater.getCharacteristic(hap.Characteristic.CurrentTemperature).handleGetRequest(), 26);
+    assert.equal(
+      warnings.some(
+        (warning) =>
+          warning.originatorChain.includes('Current Relative Humidity') === true && warning.message.includes('illegal value') === true,
+      ),
+      false,
+    );
+    missing = false;
+    await timer.callback();
+    assert.equal(await humidity.handleGetRequest(), 55);
+  } finally {
+    for (let callback of runtime.events.get('shutdown') ?? []) {
+      await callback();
+    }
+  }
+});

@@ -1,6 +1,10 @@
 # Change Log
 
-## v0.0.1 (Unreleased)
+## v0.0.2 (2026/10/16)
+
+- Handle units without indoor humidity: retain the last valid sensor reading on both heater/cooler and dry-mode services, falling back to zero when none exists, without returning null or raising a communication error.
+
+## v0.0.1 (2026/10/07)
 
 - Manage status polling per client in the platform, following Denon, and feed snapshots to accessories through UPDATE messages; remove the air-conditioner polling timer and GET callback.
 

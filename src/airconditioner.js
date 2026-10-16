@@ -49,13 +49,21 @@ export default class Airconditioner extends HomeKitDevice {
 
     this.addCharacteristic(this.heaterCoolerService, this.hap.Characteristic.CurrentTemperature, {
       onGet: () => {
-        return Number.isFinite(this.deviceData.htemp) === true ? this.deviceData.htemp : null;
+        let value =
+          Number.isFinite(this.deviceData.htemp) === true
+            ? this.deviceData.htemp
+            : this.heaterCoolerService.getCharacteristic(this.hap.Characteristic.CurrentTemperature).value;
+        return Number.isFinite(value) === true ? value : 0;
       },
     });
 
     this.addCharacteristic(this.heaterCoolerService, this.hap.Characteristic.CurrentRelativeHumidity, {
       onGet: () => {
-        return Number.isFinite(this.deviceData.hhum) === true ? this.deviceData.hhum : null;
+        let value =
+          Number.isFinite(this.deviceData.hhum) === true
+            ? this.deviceData.hhum
+            : this.heaterCoolerService.getCharacteristic(this.hap.Characteristic.CurrentRelativeHumidity).value;
+        return Number.isFinite(value) === true ? value : 0;
       },
     });
 
@@ -186,22 +194,24 @@ export default class Airconditioner extends HomeKitDevice {
           : this.hap.Characteristic.CurrentHumidifierDehumidifierState.INACTIVE;
       },
     });
-    this.dehumidifierService.updateCharacteristic(
-      this.hap.Characteristic.TargetHumidifierDehumidifierState,
-      this.hap.Characteristic.TargetHumidifierDehumidifierState.DEHUMIDIFIER,
-    );
+
     this.addCharacteristic(this.dehumidifierService, this.hap.Characteristic.TargetHumidifierDehumidifierState, {
       props: {
         validValues: [this.hap.Characteristic.TargetHumidifierDehumidifierState.DEHUMIDIFIER],
       },
-      onGet: () => {
-        return this.hap.Characteristic.TargetHumidifierDehumidifierState.DEHUMIDIFIER;
-      },
+      initialValue: this.hap.Characteristic.TargetHumidifierDehumidifierState.DEHUMIDIFIER,
     });
 
+    // HumidifierDehumidifier requires this characteristic even without a sensor.
+    // Retain its last reading, or the numeric default when none exists, so a
+    // missing sensor cannot make the service unavailable to HomeKit.
     this.addCharacteristic(this.dehumidifierService, this.hap.Characteristic.CurrentRelativeHumidity, {
       onGet: () => {
-        return Number.isFinite(this.deviceData.hhum) === true ? this.deviceData.hhum : null;
+        let value =
+          Number.isFinite(this.deviceData.hhum) === true
+            ? this.deviceData.hhum
+            : this.dehumidifierService.getCharacteristic(this.hap.Characteristic.CurrentRelativeHumidity).value;
+        return Number.isFinite(value) === true ? value : 0;
       },
     });
 
@@ -384,10 +394,6 @@ export default class Airconditioner extends HomeKitDevice {
       powered === true && deviceData.mode === MODE.DEHUMIDIFIER
         ? this.hap.Characteristic.CurrentHumidifierDehumidifierState.DEHUMIDIFYING
         : this.hap.Characteristic.CurrentHumidifierDehumidifierState.INACTIVE,
-    );
-    this.dehumidifierService.updateCharacteristic(
-      this.hap.Characteristic.TargetHumidifierDehumidifierState,
-      this.hap.Characteristic.TargetHumidifierDehumidifierState.DEHUMIDIFIER,
     );
     this.dehumidifierService.updateCharacteristic(
       this.hap.Characteristic.SwingMode,

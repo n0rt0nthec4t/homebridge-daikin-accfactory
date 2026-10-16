@@ -2,7 +2,7 @@
     "name": "homebridge-daikin-accfactory",
     "displayName": "Daikin Accfactory",
     "type": "module",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "Homebridge support for Daikin Air-conditioning systems",
     "author": "n0rt0nthec4t",
     "license": "Apache-2.0",
