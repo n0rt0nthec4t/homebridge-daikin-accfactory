@@ -121,23 +121,84 @@ test('identity accepts MAC separators but rejects corrupt identities', async (co
   }
 });
 
-test('incomplete polls mark the client offline and retain the last complete snapshot', async (context) => {
+test('two consecutive incomplete polls mark the client offline and retain the last complete snapshot', async (context) => {
   let control = { pow: '1', mode: '3', stemp: '25', shum: '0', f_rate: 'B', f_dir: '0' };
   let sensor = { htemp: '26' };
   mockDaikin(context, async (_system, path) => (path === '/aircon/get_control_info' ? control : sensor));
   let client = new DaikinClient('10.0.0.2', 80);
   await client.poll();
   let previous = client.control;
+  let previousSensor = client.sensor;
   control = { pow: '1' };
   await assert.rejects(client.poll(), /Incomplete/);
-  assert.equal(client.online, false);
+  assert.equal(client.online, true);
   assert.equal(client.control, previous);
+  assert.equal(client.sensor, previousSensor);
   control = previous;
   sensor = {};
   await assert.rejects(client.poll(), /Incomplete/);
+  assert.equal(client.online, false);
+  assert.equal(client.control, previous);
+  assert.equal(client.sensor, previousSensor);
+  await assert.rejects(client.poll(), /Incomplete/);
+  assert.equal(client.online, false);
   sensor = { htemp: '--' };
   await client.poll();
   assert.equal(client.online, true);
+  sensor = {};
+  await assert.rejects(client.poll(), /Incomplete/);
+  assert.equal(client.online, true);
+});
+
+test('successful polls reset isolated transport failures and recover immediately after an outage', async (context) => {
+  let failure;
+  let attempts = 0;
+  mockDaikin(context, async (_system, path) => {
+    if (path === '/aircon/get_control_info') {
+      attempts++;
+      if (failure !== undefined) {
+        throw failure;
+      }
+      return { pow: '1', mode: '3', stemp: '25', shum: '0', f_rate: 'B', f_dir: '0' };
+    }
+    return { htemp: '26' };
+  });
+  let client = new DaikinClient('10.0.0.2');
+  await client.poll();
+  // A retryable transport failure exhausts both HTTP attempts but counts as
+  // only one failed poll. Success between failures starts a fresh sequence.
+  for (let index = 0; index < 2; index++) {
+    failure = new TypeError('connection lost');
+    let previous = client.control;
+    let before = attempts;
+    await assert.rejects(client.poll(), /connection lost/);
+    assert.equal(attempts - before, 2);
+    assert.equal(client.online, true);
+    assert.equal(client.control, previous);
+    failure = undefined;
+    await client.poll();
+    assert.equal(client.online, true);
+  }
+  failure = new TypeError('connection lost');
+  await assert.rejects(client.poll(), /connection lost/);
+  assert.equal(client.online, true);
+  await assert.rejects(client.poll(), /connection lost/);
+  assert.equal(client.online, false);
+  failure = undefined;
+  await client.poll();
+  assert.equal(client.online, true);
+});
+
+test('failed startup polls remain offline without a snapshot', async (context) => {
+  mockDaikin(context, async () => ({}));
+  let client = new DaikinClient('10.0.0.2');
+  for (let index = 0; index < 2; index++) {
+    await assert.rejects(client.poll(), /Incomplete/);
+    assert.equal(client.online, false);
+    assert.equal(client.control, undefined);
+    assert.equal(client.sensor, undefined);
+    assert.equal(client.deviceData(), undefined);
+  }
 });
 
 test('mode memory fields map directly and accepted commands update them', async (context) => {

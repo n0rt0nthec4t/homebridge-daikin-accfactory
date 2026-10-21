@@ -359,6 +359,56 @@ test('platform polling feeds air-conditioner and outdoor sensor updates and stop
   assert.equal(requests, previousRequests);
 });
 
+test('poll failures debounce offline publication for the air conditioner and outdoor sensor', async (context) => {
+  let timer = mockPollTimer(context);
+  let available = true;
+  let runtime = setup(
+    context,
+    async (system, path) => {
+      if (available === false && path === '/aircon/get_control_info') {
+        return { pow: '1' };
+      }
+      return snapshot(system, path);
+    },
+    {
+      options: { autoDiscover: false, externalSensor: true, pollInterval: 5 },
+      devices: [{ system: '10.0.0.2' }],
+    },
+  );
+  // Accessory loggers bind the supplied methods when the devices are created.
+  let warnings = context.mock.method(HomeKitDevice.LOGGER, 'warn');
+  let successes = context.mock.method(HomeKitDevice.LOGGER, 'success');
+  let debug = context.mock.method(HomeKitDevice.LOGGER, 'debug');
+  try {
+    await runtime.events.get('didFinishLaunching')[0]();
+    warnings.mock.resetCalls();
+    successes.mock.resetCalls();
+    debug.mock.resetCalls();
+    let sensor = runtime.registered.find((accessory) => accessory.getService(hap.Service.TemperatureSensor));
+    let service = sensor.getService(hap.Service.TemperatureSensor);
+    available = false;
+    await timer.callback();
+    assert.equal(warnings.mock.calls.length, 0);
+    assert.equal(service.getCharacteristic(hap.Characteristic.StatusActive).value, true);
+    assert.equal(service.getCharacteristic(hap.Characteristic.CurrentTemperature).value, 30);
+    await timer.callback();
+    assert.equal(warnings.mock.calls.filter((call) => call.arguments[0] === 'Device "%s" is offline').length, 2);
+    assert.equal(service.getCharacteristic(hap.Characteristic.StatusActive).value, false);
+    assert.equal(service.getCharacteristic(hap.Characteristic.StatusFault).value, hap.Characteristic.StatusFault.GENERAL_FAULT);
+    assert.equal(debug.mock.calls.filter((call) => call.arguments[0] === 'Daikin poll failed for %s: %s').length, 2);
+    available = true;
+    await timer.callback();
+    assert.equal(successes.mock.calls.filter((call) => call.arguments[0] === 'Device "%s" is online').length, 2);
+    assert.equal(service.getCharacteristic(hap.Characteristic.StatusActive).value, true);
+    assert.equal(service.getCharacteristic(hap.Characteristic.StatusFault).value, hap.Characteristic.StatusFault.NO_FAULT);
+    assert.equal(runtime.registered.length, 2);
+  } finally {
+    for (let callback of runtime.events.get('shutdown') ?? []) {
+      await callback();
+    }
+  }
+});
+
 test('per-system HTTP port applies to identity, polling, and control writes', async (context) => {
   let requests = [];
   let runtime = setup(

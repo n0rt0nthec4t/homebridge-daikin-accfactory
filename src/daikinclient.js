@@ -15,7 +15,7 @@
 // - Daikin values can contain an equals sign or percent-encoded text
 // - Network tests replace the fetch boundary for deterministic results
 //
-// Code version 2026.10.07
+// Code version 2026.10.22
 // Mark Hulskamp
 'use strict';
 
@@ -31,6 +31,8 @@ const CONTROL_FIELDS = ['pow', 'mode', 'stemp', 'shum', 'f_rate', 'f_dir'];
 // Own one physical system's HTTP endpoint and protocol-shaped state. The
 // platform manages lifecycle; no Daikin response fields need mapping there.
 export default class DaikinClient {
+  #failedPolls = 0;
+
   constructor(system, httpPort = 80) {
     this.system = system;
     this.httpPort = httpPort;
@@ -109,7 +111,7 @@ export default class DaikinClient {
 
   async poll() {
     // Publish a pair only after both requests succeed; preserve the previous
-    // snapshot when a poll is incomplete so an offline accessory can retain it.
+    // snapshot when a poll is incomplete, including during the offline grace poll.
     try {
       let [control, sensor] = await Promise.all([this.request('/aircon/get_control_info'), this.request('/aircon/get_sensor_info')]);
       // HTTP success alone does not establish a usable state snapshot. Missing
@@ -124,9 +126,16 @@ export default class DaikinClient {
       }
       this.control = control;
       this.sensor = sensor;
+      this.#failedPolls = 0;
       this.online = true;
     } catch (error) {
-      this.online = false;
+      // A single failed poll must not flap an established accessory offline.
+      // Keep startup offline until a complete snapshot succeeds, and continue
+      // rejecting failures so the platform retains its debug diagnostics.
+      this.#failedPolls = Math.min(this.#failedPolls + 1, 2);
+      if (this.#failedPolls === 2) {
+        this.online = false;
+      }
       throw error;
     }
   }

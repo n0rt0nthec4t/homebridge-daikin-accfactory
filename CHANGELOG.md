@@ -1,5 +1,11 @@
 # Change Log
 
+## v0.0.3 (2026/10/22)
+
+- Require two consecutive failed or incomplete status polls before marking an existing accessory offline; retain the last known state after an isolated failure and restore online status immediately after a successful poll.
+
+- Update development dependencies: Node.js types, TypeScript ESLint parser, ESLint, and Prettier; refresh transitive dependencies to resolve the reported npm audit vulnerabilities.
+
 ## v0.0.2 (2026/10/16)
 
 - Publish command status after SET completes to support the updated HomeKitDevice lifecycle; keep HTTP work independent of HomeKit publication so commands arriving during a poll cannot deadlock.
